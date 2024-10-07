@@ -6,7 +6,7 @@ const char* ssid = "Lissomtech_work_2.5G";  // Your WiFi SSID
 const char* password = "#Lissom@3111";       // Your WiFi password
 
 // MQTT server details
-const char* mqtt_server = "192.168.0.116";   // IP address of your MQTT broker
+const char* mqtt_server = "13.127.138.244";   // IP address of your MQTT broker
 
 WiFiClient espClient;
 PubSubClient client(espClient);

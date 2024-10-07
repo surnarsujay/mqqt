@@ -5,7 +5,7 @@ const app = express();
 const port = 3000;  // Port for the web interface
 
 // MQTT Server Configuration
-const brokerUrl = 'mqtt://localhost';  // Adjust to your broker's IP
+const brokerUrl = 'mqtt://13.127.138.244';  // Adjust to your broker's IP
 const mqttServer = mqtt.connect(brokerUrl);
 
 // MSSQL Database Configuration
