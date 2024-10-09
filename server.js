@@ -1,91 +1,110 @@
+const aedes = require('aedes')();
+const net = require('net');
+const ws = require('ws');
+const http = require('http');
 const mqtt = require('mqtt');
-const sql = require('mssql');
+const bodyParser = require('body-parser'); // For parsing POST requests
+
+const mqttPort = 1883;
+const wsPort = 3000;
+const httpPort = 8080;
+
+// In-memory list of devices (ID, name, subscribed topic, GPIO state, etc.)
+let devices = [];
+
+// MQTT broker setup
+const mqttServer = net.createServer(aedes.handle);
+mqttServer.listen(mqttPort, function () {
+  console.log(`MQTT broker running on port ${mqttPort}`);
+});
+
+// WebSocket server setup for real-time data
+const wss = new ws.Server({ port: wsPort });
+wss.on('connection', function (socket) {
+  console.log('WebSocket client connected');
+  socket.on('message', function (message) {
+    console.log('Received from WebSocket:', message);
+  });
+});
+
+// Handle incoming MQTT messages and forward them to WebSocket clients
+aedes.on('publish', function (packet, client) {
+  const topic = packet.topic;
+  const message = packet.payload.toString();
+  console.log(`Received MQTT message: ${message} on topic ${topic}`);
+
+  // Broadcast data to all WebSocket clients
+  wss.clients.forEach(client => {
+    if (client.readyState === ws.OPEN) {
+      client.send(JSON.stringify({ topic, message }));
+    }
+  });
+});
+
+// REST API to add, delete, and manage devices via the webpage
 const express = require('express');
 const app = express();
-const port = 3000;  // Port for the web interface
+app.use(bodyParser.json());
 
-// MQTT Server Configuration
-const brokerUrl = 'mqtt://13.127.138.244';  // Adjust to your broker's IP
-const mqttServer = mqtt.connect(brokerUrl);
+// Add a new device
+app.post('/devices', (req, res) => {
+  const { id, name } = req.body;
 
-// MSSQL Database Configuration
-const dbConfig = {
-    user: 'easytime',
-    password: '6Ifm2l~36',
-    server: '146.88.24.73',  // e.g., 'localhost' or a remote server
-    database: 'easytime',
-    options: {
-        encrypt: true,  // Use this if you're on Azure or a secure connection
-        trustServerCertificate: true  // Set to true if using self-signed certificate
-    }
-};
+  if (!id || !name) {
+    return res.status(400).send('Device ID and Name are required');
+  }
 
-// Connect to the database
-sql.connect(dbConfig).then(pool => {
-    if (pool.connected) {
-        console.log('Connected to the MSSQL database.');
-    }
+  // Check if the device already exists
+  const existingDevice = devices.find(device => device.id === id);
+  if (existingDevice) {
+    return res.status(400).send('Device already exists');
+  }
 
-    mqttServer.on('connect', () => {
-        console.log('MQTT server connected.');
-        // Subscribe to get LED status
-        mqttServer.subscribe('device/led/status', err => {
-            if (!err) {
-                console.log('Subscribed to LED status.');
-            }
-        });
-    });
+  // Add the new device
+  const newDevice = { id, name, topic: `esp8266/${id}/control`, state: 'OFF' };
+  devices.push(newDevice);
 
-    // Store the latest LED status
-    let ledStatus = 'off';
-
-    // Handle incoming messages
-    mqttServer.on('message', (topic, message) => {
-        if (topic === 'device/led/status') {
-            ledStatus = message.toString();
-            console.log(`LED status updated: ${ledStatus}`);
-        }
-    });
-
-    // Serve the HTML page to control the LED
-    app.get('/', (req, res) => {
-        res.send(`
-            <html>
-            <body>
-                <h1>Control LED</h1>
-                <button onclick="sendCommand('on')">Turn ON</button>
-                <button onclick="sendCommand('off')">Turn OFF</button>
-                <h2>LED Status: <span id="status">${ledStatus}</span></h2>
-                <script>
-                    function sendCommand(command) {
-                        fetch('/control/' + command)
-                            .then(response => response.json())
-                            .then(data => {
-                                document.getElementById('status').innerText = data.status;
-                            });
-                    }
-                </script>
-            </body>
-            </html>
-        `);
-    });
-
-    // Handle LED control via HTTP
-    app.get('/control/:command', (req, res) => {
-        const command = req.params.command;
-        if (command === 'on' || command === 'off') {
-            mqttServer.publish('device/led/control', command);  // Publish the command to the ESP8266
-            res.json({ status: command });
-        } else {
-            res.status(400).json({ error: 'Invalid command' });
-        }
-    });
-
-    // Start the web server
-    app.listen(port, () => {
-        console.log(`Web server running on http://localhost:${port}`);
-    });
-
-}).catch(err => {
-    console.error('Database connection error:', err);
+  res.status(201).send(newDevice);
 });
+
+// Delete a device
+app.delete('/devices/:id', (req, res) => {
+  const { id } = req.params;
+
+  const deviceIndex = devices.findIndex(device => device.id === id);
+  if (deviceIndex === -1) {
+    return res.status(404).send('Device not found');
+  }
+
+  devices.splice(deviceIndex, 1);
+  res.status(200).send('Device deleted');
+});
+
+// Get the list of devices
+app.get('/devices', (req, res) => {
+  res.status(200).json(devices);
+});
+
+// Control a device's GPIO (turn LED ON/OFF)
+app.post('/devices/:id/control', (req, res) => {
+  const { id } = req.params;
+  const { action } = req.body;
+
+  const device = devices.find(device => device.id === id);
+  if (!device) {
+    return res.status(404).send('Device not found');
+  }
+
+  // Send control message via MQTT
+  mqttClient.publish(device.topic, action);
+  device.state = action; // Update in-memory device state
+  res.status(200).send(`Device ${id} turned ${action}`);
+});
+
+// Start the HTTP server for the REST API
+app.listen(httpPort, () => {
+  console.log(`HTTP server running on port ${httpPort}`);
+});
+
+// MQTT Client to control devices
+const mqttClient = mqtt.connect('mqtt://localhost');
